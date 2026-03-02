@@ -105,6 +105,44 @@ class SheerIDVerifier:
             logger.error(f"S3 上传失败: {e}")
             return False
 
+    def _submit_student_info(
+        self,
+        first_name: str,
+        last_name: str,
+        birth_date: str,
+        email: str,
+        school_id: str,
+        school: Dict,
+    ) -> Tuple[Dict, int]:
+        step2_body = {
+            "firstName": first_name,
+            "lastName": last_name,
+            "birthDate": birth_date,
+            "email": email,
+            "phoneNumber": "",
+            "organization": {
+                "id": int(school_id),
+                "idExtended": school["idExtended"],
+                "name": school["name"],
+            },
+            "deviceFingerprintHash": self.device_fingerprint,
+            "externalUserId": self.external_user_id,
+            "locale": "en-US",
+            "metadata": {
+                "marketConsentValue": False,
+                "refererUrl": self.install_page_url,
+                "externalUserId": self.external_user_id,
+                "verificationId": self.verification_id,
+                "flags": '{"collect-info-step-email-first":"default","doc-upload-considerations":"default","doc-upload-may24":"default","doc-upload-redesign-use-legacy-message-keys":false,"docUpload-assertion-checklist":"default","font-size":"default","include-cvec-field-france-student":"not-labeled-optional"}',
+                "submissionOptIn": "By submitting the personal information above, I acknowledge that my personal information is being collected under the privacy policy of the business from which I am seeking a discount",
+            },
+        }
+        return self._sheerid_request(
+            "POST",
+            f"{config.SHEERID_BASE_URL}/rest/v2/verification/{self.verification_id}/step/collectStudentPersonalInfo",
+            step2_body,
+        )
+
     def verify(
         self,
         first_name: str = None,
@@ -149,41 +187,40 @@ class SheerIDVerifier:
 
             # 提交学生信息
             logger.info("步骤 2/4: 提交学生信息...")
-            step2_body = {
-                "firstName": first_name,
-                "lastName": last_name,
-                "birthDate": birth_date,
-                "email": email,
-                "phoneNumber": "",
-                "organization": {
-                    "id": int(school_id),
-                    "idExtended": school["idExtended"],
-                    "name": school["name"],
-                },
-                "deviceFingerprintHash": self.device_fingerprint,
-                "externalUserId": self.external_user_id,
-                "locale": "en-US",
-                "metadata": {
-                    "marketConsentValue": False,
-                    "refererUrl": self.install_page_url,
-                    "externalUserId": self.external_user_id,
-                    "verificationId": self.verification_id,
-                    "flags": '{"collect-info-step-email-first":"default","doc-upload-considerations":"default","doc-upload-may24":"default","doc-upload-redesign-use-legacy-message-keys":false,"docUpload-assertion-checklist":"default","font-size":"default","include-cvec-field-france-student":"not-labeled-optional"}',
-                    "submissionOptIn": "By submitting the personal information above, I acknowledge that my personal information is being collected under the privacy policy of the business from which I am seeking a discount",
-                },
-            }
-
-            step2_data, step2_status = self._sheerid_request(
-                "POST",
-                f"{config.SHEERID_BASE_URL}/rest/v2/verification/{self.verification_id}/step/collectStudentPersonalInfo",
-                step2_body,
+            step2_data, step2_status = self._submit_student_info(
+                first_name, last_name, birth_date, email, school_id, school
             )
 
             if step2_status != 200:
                 raise Exception(f"步骤 2 失败 (状态码 {step2_status}): {step2_data}")
             if step2_data.get("currentStep") == "error":
-                error_msg = ", ".join(step2_data.get("errorIds", ["Unknown error"]))
-                raise Exception(f"步骤 2 错误: {error_msg}")
+                error_ids = step2_data.get("errorIds", ["Unknown error"])
+                if "fraudRulesReject" in error_ids:
+                    logger.warning("Step 2 hit fraudRulesReject, retrying with a fresh profile...")
+                    name = NameGenerator.generate()
+                    first_name = name["first_name"]
+                    last_name = name["last_name"]
+                    email = generate_psu_email(first_name, last_name)
+                    birth_date = generate_birth_date()
+                    self.device_fingerprint = self._generate_device_fingerprint()
+                    self.external_user_id = str(random.randint(1000000, 9999999))
+                    school_id = random.choice(list(config.SCHOOLS.keys()))
+                    school = config.SCHOOLS[school_id]
+
+                    img_data = generate_image(first_name, last_name, school_id)
+                    file_size = len(img_data)
+
+                    step2_data, step2_status = self._submit_student_info(
+                        first_name, last_name, birth_date, email, school_id, school
+                    )
+                    if step2_status != 200:
+                        raise Exception(f"步骤 2 重试失败 (状态码 {step2_status}): {step2_data}")
+                    if step2_data.get("currentStep") == "error":
+                        error_msg = ", ".join(step2_data.get("errorIds", ["Unknown error"]))
+                        raise Exception(f"步骤 2 错误: {error_msg}")
+                else:
+                    error_msg = ", ".join(error_ids)
+                    raise Exception(f"步骤 2 错误: {error_msg}")
 
             logger.info(f"✅ 步骤 2 完成: {step2_data.get('currentStep')}")
             current_step = step2_data.get("currentStep", current_step)
