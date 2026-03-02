@@ -21,8 +21,10 @@ logger = logging.getLogger(__name__)
 class SheerIDVerifier:
     """SheerID 学生身份验证器"""
 
-    def __init__(self, verification_id: str):
+    def __init__(self, install_page_url: str, verification_id: Optional[str] = None):
+        self.install_page_url = self.normalize_url(install_page_url)
         self.verification_id = verification_id
+        self.external_user_id = self.parse_external_user_id(self.install_page_url)
         self.device_fingerprint = self._generate_device_fingerprint()
         self.http_client = httpx.Client(timeout=30.0)
 
@@ -46,6 +48,29 @@ class SheerIDVerifier:
         if match:
             return match.group(1)
         return None
+
+    @staticmethod
+    def parse_external_user_id(url: str) -> Optional[str]:
+        match = re.search(r"externalUserId=([^&]+)", url, re.IGNORECASE)
+        if match:
+            return match.group(1)
+        return None
+
+    def create_verification(self) -> str:
+        """通过 installPageUrl 申请新的 verificationId"""
+        body = {
+            "programId": config.PROGRAM_ID,
+            "installPageUrl": self.install_page_url,
+        }
+        data, status = self._sheerid_request(
+            "POST", f"{config.MY_SHEERID_URL}/rest/v2/verification/", body
+        )
+        if status != 200 or not isinstance(data, dict) or not data.get("verificationId"):
+            raise Exception(f"创建 verification 失败 (状态码 {status}): {data}")
+
+        self.verification_id = data["verificationId"]
+        logger.info(f"✅ 获取 verificationId: {self.verification_id}")
+        return self.verification_id
 
     def _sheerid_request(
         self, method: str, url: str, body: Optional[Dict] = None
@@ -104,6 +129,11 @@ class SheerIDVerifier:
                 email = generate_psu_email(first_name, last_name)
             if not birth_date:
                 birth_date = generate_birth_date()
+            if not self.external_user_id:
+                self.external_user_id = str(random.randint(1000000, 9999999))
+            if not self.verification_id:
+                logger.info("申请新的 verificationId ...")
+                self.create_verification()
 
             logger.info(f"学生信息: {first_name} {last_name}")
             logger.info(f"邮箱: {email}")
@@ -131,10 +161,12 @@ class SheerIDVerifier:
                     "name": school["name"],
                 },
                 "deviceFingerprintHash": self.device_fingerprint,
+                "externalUserId": self.external_user_id,
                 "locale": "en-US",
                 "metadata": {
                     "marketConsentValue": False,
-                    "refererUrl": f"{config.SHEERID_BASE_URL}/verify/{config.PROGRAM_ID}/?verificationId={self.verification_id}",
+                    "refererUrl": self.install_page_url,
+                    "externalUserId": self.external_user_id,
                     "verificationId": self.verification_id,
                     "flags": '{"collect-info-step-email-first":"default","doc-upload-considerations":"default","doc-upload-may24":"default","doc-upload-redesign-use-legacy-message-keys":false,"docUpload-assertion-checklist":"default","font-size":"default","include-cvec-field-france-student":"not-labeled-optional"}',
                     "submissionOptIn": "By submitting the personal information above, I acknowledge that my personal information is being collected under the privacy policy of the business from which I am seeking a discount",
@@ -235,7 +267,7 @@ def main():
     print(f"✅ 解析到验证 ID: {verification_id}")
     print()
 
-    verifier = SheerIDVerifier(verification_id)
+    verifier = SheerIDVerifier(url, verification_id=verification_id)
     result = verifier.verify()
 
     print()

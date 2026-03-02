@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE, db: Database):
-    """处理 /verify 命令 - Gemini One Pro"""
+    """处理 /verify 命令 - Google One Student"""
     user_id = update.effective_user.id
 
     if db.is_user_blocked(user_id):
@@ -42,7 +42,7 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE, db:
 
     if not context.args:
         await update.message.reply_text(
-            get_verify_usage_message("/verify", "Gemini One Pro")
+            get_verify_usage_message("/verify", "Google One Student")
         )
         return
 
@@ -55,7 +55,8 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE, db:
         return
 
     verification_id = OneVerifier.parse_verification_id(url)
-    if not verification_id:
+    external_user_id = OneVerifier.parse_external_user_id(url)
+    if not verification_id and not external_user_id:
         await update.message.reply_text("无效的 SheerID 链接，请检查后重试。")
         return
 
@@ -64,14 +65,14 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE, db:
         return
 
     processing_msg = await update.message.reply_text(
-        f"开始处理 Gemini One Pro 认证...\n"
-        f"验证ID: {verification_id}\n"
+        f"开始处理 Google One Student 认证...\n"
+        f"验证ID: {verification_id or '待自动创建'}\n"
         f"已扣除 {VERIFY_COST} 积分\n\n"
         "请稍候，这可能需要 1-2 分钟..."
     )
 
     try:
-        verifier = OneVerifier(verification_id)
+        verifier = OneVerifier(url, verification_id=verification_id)
         result = await asyncio.to_thread(verifier.verify)
 
         db.add_verification(
