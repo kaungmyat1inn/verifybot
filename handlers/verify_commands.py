@@ -29,15 +29,15 @@ logger = logging.getLogger(__name__)
 
 
 async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE, db: Database):
-    """处理 /verify 命令 - Google One Student"""
+    """Handle /verify command - Google One Student"""
     user_id = update.effective_user.id
 
     if db.is_user_blocked(user_id):
-        await update.message.reply_text("您已被拉黑，无法使用此功能。")
+        await update.message.reply_text("You are blocked and cannot use this feature.")
         return
 
     if not db.user_exists(user_id):
-        await update.message.reply_text("请先使用 /start 注册。")
+        await update.message.reply_text("Please register first using /start.")
         return
 
     if not context.args:
@@ -57,18 +57,18 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE, db:
     verification_id = OneVerifier.parse_verification_id(url)
     external_user_id = OneVerifier.parse_external_user_id(url)
     if not verification_id and not external_user_id:
-        await update.message.reply_text("无效的 SheerID 链接，请检查后重试。")
+        await update.message.reply_text("Invalid SheerID link. Please check and try again.")
         return
 
     if not db.deduct_balance(user_id, VERIFY_COST):
-        await update.message.reply_text("扣除积分失败，请稍后重试。")
+        await update.message.reply_text("Failed to deduct points. Please try again later.")
         return
 
     processing_msg = await update.message.reply_text(
-        f"开始处理 Google One Student 认证...\n"
-        f"验证ID: {verification_id or '待自动创建'}\n"
-        f"已扣除 {VERIFY_COST} 积分\n\n"
-        "请稍候，这可能需要 1-2 分钟..."
+        f"Starting Google One Student verification...\n"
+        f"Verification ID: {verification_id or 'will be created automatically'}\n"
+        f"{VERIFY_COST} point(s) deducted\n\n"
+        "Please wait, this may take 1-2 minutes..."
     )
 
     try:
@@ -84,24 +84,24 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE, db:
         )
 
         if result["success"]:
-            result_msg = "✅ 认证成功！\n\n"
+            result_msg = "✅ Verification submitted successfully!\n\n"
             if result.get("pending"):
-                result_msg += "文档已提交，等待人工审核。\n"
+                result_msg += "Document submitted and pending manual review.\n"
             if result.get("redirect_url"):
-                result_msg += f"跳转链接：\n{result['redirect_url']}"
+                result_msg += f"Redirect URL:\n{result['redirect_url']}"
             await processing_msg.edit_text(result_msg)
         else:
             db.add_balance(user_id, VERIFY_COST)
             await processing_msg.edit_text(
-                f"❌ 认证失败：{result.get('message', '未知错误')}\n\n"
-                f"已退回 {VERIFY_COST} 积分"
+                f"❌ Verification failed: {result.get('message', 'Unknown error')}\n\n"
+                f"{VERIFY_COST} point(s) refunded"
             )
     except Exception as e:
-        logger.error("验证过程出错: %s", e)
+        logger.error("Verification process failed: %s", e)
         db.add_balance(user_id, VERIFY_COST)
         await processing_msg.edit_text(
-            f"❌ 处理过程中出现错误：{str(e)}\n\n"
-            f"已退回 {VERIFY_COST} 积分"
+            f"❌ An error occurred during processing: {str(e)}\n\n"
+            f"{VERIFY_COST} point(s) refunded"
         )
 
 
