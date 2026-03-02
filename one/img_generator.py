@@ -358,21 +358,58 @@ def generate_image(first_name, last_name, school_id='2565'):
         # 生成 HTML
         html_content = generate_html(first_name, last_name, school_id)
 
-        # 使用 Playwright 截图（替代 Selenium）
+        # 使用 Playwright 截图（优先）
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--disable-software-rasterizer',
+                    '--disable-extensions',
+                ],
+                timeout=120000,
+            )
             page = browser.new_page(viewport={'width': 1200, 'height': 900})
-            page.set_content(html_content, wait_until='load')
-            page.wait_for_timeout(500)  # 等待样式加载
+            page.set_content(html_content, wait_until='domcontentloaded')
+            page.wait_for_load_state('load', timeout=5000)
             screenshot_bytes = page.screenshot(type='png', full_page=True)
             browser.close()
 
         return screenshot_bytes
 
-    except ImportError:
-        raise Exception("需要安装 playwright: pip install playwright && playwright install chromium")
-    except Exception as e:
-        raise Exception(f"生成图片失败: {str(e)}")
+    except Exception:
+        # Fallback: avoid hard-fail when Chromium cannot start in constrained containers.
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+
+            img = Image.new('RGB', (1200, 900), color='white')
+            draw = ImageDraw.Draw(img)
+            title = "Penn State - Enrollment Proof"
+            body = [
+                f"Student: {first_name} {last_name}",
+                f"PSU ID: {generate_psu_id()}",
+                f"Email: {generate_psu_email(first_name, last_name)}",
+                f"Issued: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                "Status: Enrolled",
+            ]
+
+            font_title = ImageFont.load_default()
+            font_body = ImageFont.load_default()
+            draw.rectangle([(0, 0), (1200, 120)], fill=(30, 64, 124))
+            draw.text((40, 45), title, fill='white', font=font_title)
+
+            y = 180
+            for line in body:
+                draw.text((60, y), line, fill=(20, 20, 20), font=font_body)
+                y += 50
+
+            buffer = BytesIO()
+            img.save(buffer, format='PNG')
+            return buffer.getvalue()
+        except Exception as e:
+            raise Exception(f"Image generation failed: {str(e)}")
 
 
 if __name__ == '__main__':
